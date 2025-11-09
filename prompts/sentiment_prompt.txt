@@ -1,0 +1,7 @@
+Analyze the sentiment of the following customer comment.
+Classify it as: POSITIVE, NEGATIVE, or NEUTRAL.
+Only respond with one of these three words in uppercase.
+
+Customer comment: {comment}
+
+Sentiment:

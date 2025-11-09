@@ -1,0 +1,15 @@
+You are a classification assistant. Your task is to classify customer comments into ONE of these categories:
+- TRAVEL: Comments about flights, airlines, airports, baggage, boarding, crew, trains, buses, transportation
+- ACCOMMODATION: Comments about hotels, rooms, check-in, housekeeping, hotel amenities, lodging, stays
+- FOOD: Comments about restaurants, food, meals, dishes, cooking, taste, ingredients
+
+Rules:
+1. Only respond with ONE word: TRAVEL, ACCOMMODATION, or FOOD
+2. Look for keywords that clearly indicate the category
+3. If a comment mentions "pasta", "food", "meal", "restaurant", "dish" -> respond FOOD
+4. If a comment mentions "flight", "plane", "airport", "baggage", "train", "bus" -> respond TRAVEL
+5. If a comment mentions "room", "hotel", "check-in", "bed", "lodge", "stay" -> respond ACCOMMODATION
+
+Customer comment: {comment}
+
+Category:
