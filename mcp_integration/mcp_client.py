@@ -38,6 +38,11 @@ class SimpleMCPClient:
         self._reader_thread = None
         self._stderr_thread = None
         self._running = False
+        # Default timeout (seconds) for waiting server responses and API calls
+        # Can be overridden by passing timeout to methods in future
+        self.default_timeout = 120
+        # Optional callback for stderr lines (for UI display)
+        self.stderr_callback = None
     
     def connect(self):
         """Start the MCP server process."""
@@ -62,20 +67,41 @@ class SimpleMCPClient:
         self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
         self._stderr_thread.start()
         
-        # Initialize the session
-        self._send_request("initialize", {
-            "protocolVersion": "0.1.0",
-            "capabilities": {},
+        # Initialize the MCP session
+        init_request_id = self._send_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "roots": {
+                    "listChanged": False
+                }
+            },
             "clientInfo": {
                 "name": "customer-comment-analyzer-client",
                 "version": "1.0.0"
             }
         })
         
-        # Wait for initialization response
-        response = self._get_response(timeout=30)
+        # Wait for initialization response. Azure OpenAI model deployment may take
+        # longer to warm up, so use configurable default timeout.
+        try:
+            response = self._get_response(timeout=self.default_timeout)
+        except TimeoutError as te:
+            raise RuntimeError(
+                f"Timeout waiting for MCP server initialization after {self.default_timeout}s. "
+                f"Check MCP server stderr output and Azure OpenAI credentials/deployment. Original error: {te}"
+            ) from te
+
         if not response or "error" in response:
             raise RuntimeError(f"Failed to initialize MCP server: {response}")
+        
+        # Send initialized notification
+        initialized_notif = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }
+        notif_str = json.dumps(initialized_notif) + "\n"
+        self.process.stdin.write(notif_str)
+        self.process.stdin.flush()
     
     def disconnect(self):
         """Stop the MCP server process."""
@@ -112,7 +138,14 @@ class SimpleMCPClient:
                 if not line:
                     break
                 # Print stderr to console for debugging
-                print(f"[MCP Server Error] {line.strip()}", file=sys.stderr)
+                error_line = f"[MCP Server Error] {line.strip()}"
+                print(error_line, file=sys.stderr)
+                # Call callback if provided (for UI display)
+                if self.stderr_callback:
+                    try:
+                        self.stderr_callback(line.strip())
+                    except:
+                        pass  # Don't let callback errors break stderr reading
             except:
                 break
     
@@ -135,10 +168,14 @@ class SimpleMCPClient:
         
         return self.request_id
     
-    def _get_response(self, timeout: float = 30) -> dict:
+    def _get_response(self, timeout: float = 60) -> dict:
         """Wait for and parse a response from the server."""
         start_time = time.time()
-        
+
+        # Allow caller to pass None to wait indefinitely (use with caution)
+        if timeout is None:
+            timeout = float('inf')
+
         while time.time() - start_time < timeout:
             try:
                 line = self._stdout_queue.get(timeout=0.1)
@@ -150,26 +187,42 @@ class SimpleMCPClient:
             except queue.Empty:
                 continue
         
-        raise TimeoutError("Timeout waiting for response from MCP server")
+        raise TimeoutError(f"Timeout waiting for response from MCP server after {timeout}s")
     
     def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """Call a tool on the MCP server."""
-        self._send_request("tools/call", {
+        req_id = self._send_request("tools/call", {
             "name": tool_name,
             "arguments": arguments
         })
-        
-        response = self._get_response()
+        # Increased timeout for Azure OpenAI API calls (use default_timeout * 2)
+        try:
+            response = self._get_response(timeout=self.default_timeout * 2)
+        except TimeoutError as te:
+            raise RuntimeError(
+                f"Timeout waiting for tool '{tool_name}' response after {self.default_timeout * 2}s. "
+                f"Check Azure OpenAI status, deployment warm-up, and network connectivity. Original error: {te}"
+            ) from te
         
         if "error" in response:
-            raise RuntimeError(f"Tool call failed: {response['error']}")
+            error_msg = response["error"]
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            raise RuntimeError(f"Tool call failed: {error_msg}")
         
         # Extract the result from the response
-        if "result" in response and "content" in response["result"]:
-            content = response["result"]["content"]
-            if content and len(content) > 0:
-                text = content[0].get("text", "{}")
-                return json.loads(text)
+        if "result" in response:
+            result = response["result"]
+            # Handle MCP response format with content array
+            if "content" in result and isinstance(result["content"], list):
+                content = result["content"]
+                if content and len(content) > 0:
+                    first_content = content[0]
+                    if isinstance(first_content, dict) and "text" in first_content:
+                        text = first_content["text"]
+                        return json.loads(text)
+            # Handle direct result
+            return result
         
         return {}
     

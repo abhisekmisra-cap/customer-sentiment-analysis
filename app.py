@@ -2,6 +2,7 @@
 Customer Comment Analyzer - Streamlit Web Application (MCP Version)
 --------------------------------------------------------------------
 A user-friendly web interface using Model Context Protocol for AI analysis.
+Uses Azure OpenAI for LLM operations.
 """
 
 import streamlit as st
@@ -75,22 +76,55 @@ def initialize_session_state():
         st.session_state.analysis_history = []
     if 'client_connected' not in st.session_state:
         st.session_state.client_connected = False
+    if 'azure_endpoint' not in st.session_state:
+        st.session_state.azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+    if 'azure_api_key' not in st.session_state:
+        st.session_state.azure_api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
+    if 'azure_deployment' not in st.session_state:
+        st.session_state.azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4.1")
+    if 'azure_timeout' not in st.session_state:
+        # default timeout in seconds for MCP server init and tool calls
+        st.session_state.azure_timeout = int(os.environ.get("MCP_DEFAULT_TIMEOUT", "120"))
+    if 'mcp_stderr_logs' not in st.session_state:
+        st.session_state.mcp_stderr_logs = []
 
 
 def setup_mcp_client():
     """Initialize the MCP client connection"""
     try:
         with st.spinner("🔄 Connecting to MCP server and initializing AI model... This may take a moment..."):
+            # Set environment variables for MCP server
+            os.environ["AZURE_OPENAI_ENDPOINT"] = st.session_state.azure_endpoint
+            os.environ["AZURE_OPENAI_API_KEY"] = st.session_state.azure_api_key
+            os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"] = st.session_state.azure_deployment
+            
             # Get the path to mcp_server.py in mcp_integration directory
             server_path = Path(__file__).parent / "mcp_integration" / "mcp_server.py"
             client = SimpleMCPClient(server_script_path=str(server_path))
+            
+            # Set up stderr callback to capture logs for UI display
+            def capture_stderr(line):
+                if 'mcp_stderr_logs' in st.session_state:
+                    st.session_state.mcp_stderr_logs.append(line)
+                    # Keep only last 100 lines to avoid memory issues
+                    if len(st.session_state.mcp_stderr_logs) > 100:
+                        st.session_state.mcp_stderr_logs = st.session_state.mcp_stderr_logs[-100:]
+            
+            client.stderr_callback = capture_stderr
+            
+            # Apply user-selected timeout to MCP client
+            try:
+                client.default_timeout = int(st.session_state.azure_timeout)
+            except Exception:
+                client.default_timeout = client.default_timeout
+
             client.connect()
             st.session_state.mcp_client = client
             st.session_state.client_connected = True
             return True
     except Exception as e:
         st.error(f"❌ Error connecting to MCP server: {str(e)}")
-        st.info("💡 Make sure HUGGINGFACEHUB_API_TOKEN is set in environment variables.")
+        st.info("💡 Make sure Azure OpenAI credentials are correct.")
         return False
 
 
@@ -187,48 +221,113 @@ def main():
     
     # Header
     st.markdown('<h1 class="main-header">🤖 Customer Comment Analyzer</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Powered by LangChain, Hugging Face AI & Model Context Protocol</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Powered by LangChain, Azure OpenAI & Model Context Protocol</p>', unsafe_allow_html=True)
     
     # Sidebar for model status
     with st.sidebar:
-        st.header("🤖 Model Status")
+        st.header("🤖 Azure OpenAI Configuration")
         
-        # Check environment variable
-        hf_token_env = os.environ.get("HUGGINGFACEHUB_API_TOKEN", "")
-        
-        # Show connection status or token input
+        # Show connection status or credential inputs
         if not st.session_state.client_connected:
-            st.info("💡 **To connect to the MCP server, you need to provide your Hugging Face API token.**")
-            st.markdown("[Get your free token here](https://huggingface.co/settings/tokens)")
+            st.info("💡 **Configure Azure OpenAI credentials to connect to the MCP server.**")
             
-            # Token input
-            hf_token = st.text_input(
-                "Hugging Face API Token",
-                type="password",
-                value=hf_token_env,
-                placeholder="Enter your token here...",
-                help="Your token is required to initialize the AI model"
+            # Azure OpenAI Endpoint
+            azure_endpoint = st.text_input(
+                "Azure OpenAI Endpoint",
+                value=st.session_state.azure_endpoint,
+                placeholder="https://your-resource.openai.azure.com/",
+                help="Your Azure OpenAI endpoint URL"
             )
             
-            # Set token in environment if provided
-            if hf_token and hf_token != hf_token_env:
-                os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_token
+            # Azure OpenAI API Key
+            azure_api_key = st.text_input(
+                "Azure OpenAI API Key",
+                type="password",
+                value=st.session_state.azure_api_key,
+                placeholder="Enter your API key here...",
+                help="Your Azure OpenAI API key"
+            )
+            
+            # Azure OpenAI Deployment Name
+            azure_deployment = st.text_input(
+                "Deployment Name",
+                value=st.session_state.azure_deployment,
+                placeholder="gpt-4.1",
+                help="Your Azure OpenAI deployment name (e.g., gpt-4.1, gpt-4o-mini, etc.)"
+            )
+
+            # Timeout for MCP server init / tool calls
+            st.session_state.azure_timeout = st.number_input(
+                "MCP Timeout (seconds)",
+                min_value=30,
+                max_value=900,
+                value=st.session_state.azure_timeout,
+                help="How long to wait for MCP server initialization and tool responses (increase if you get timeouts)."
+            )
+            
+            # Update session state
+            st.session_state.azure_endpoint = azure_endpoint
+            st.session_state.azure_api_key = azure_api_key
+            st.session_state.azure_deployment = azure_deployment
+            
+            # Update session state
+            st.session_state.azure_endpoint = azure_endpoint
+            st.session_state.azure_api_key = azure_api_key
+            st.session_state.azure_deployment = azure_deployment
+            
+            # Test Azure OpenAI connection directly (without MCP)
+            if azure_endpoint and azure_api_key and azure_deployment:
+                if st.button("🧪 Test Azure OpenAI Direct", help="Test direct connection to Azure OpenAI without MCP to isolate issues"):
+                    with st.spinner("Testing direct Azure OpenAI connection..."):
+                        try:
+                            from openai import AzureOpenAI
+                            test_client = AzureOpenAI(
+                                azure_endpoint=azure_endpoint,
+                                api_key=azure_api_key,
+                                api_version="2024-02-15-preview"
+                            )
+                            response = test_client.chat.completions.create(
+                                model=azure_deployment,
+                                messages=[{"role": "user", "content": "Say 'test successful'"}],
+                                max_tokens=10
+                            )
+                            st.success(f"✅ Direct Azure OpenAI test passed! Response: {response.choices[0].message.content}")
+                        except Exception as e:
+                            st.error(f"❌ Direct Azure OpenAI test failed: {str(e)}")
+                            st.info("💡 This means the issue is with your Azure credentials/deployment, not MCP.")
             
             # Connect button
-            if hf_token or hf_token_env:
+            if azure_endpoint and azure_api_key and azure_deployment:
                 if st.button("🚀 Connect to MCP Server", type="primary"):
                     if setup_mcp_client():
                         st.success("✅ Connected to MCP server!")
                         st.rerun()
             else:
-                st.warning("⚠️ Please enter your Hugging Face API token above to continue.")
+                st.warning("⚠️ Please fill in all Azure OpenAI credentials above to continue.")
         else:
             st.success("✅ MCP server is connected!")
+            
+            # Show current configuration
+            with st.expander("📋 Current Configuration"):
+                st.text(f"Endpoint: {st.session_state.azure_endpoint}")
+                st.text(f"Deployment: {st.session_state.azure_deployment}")
+                st.text(f"API Key: {'*' * 20}")
+                st.text(f"Timeout: {st.session_state.azure_timeout}s")
+            
+            # Show MCP server logs for debugging
+            with st.expander("🔍 MCP Server Logs (last 50 stderr lines)", expanded=False):
+                if st.session_state.mcp_stderr_logs:
+                    log_text = "\n".join(st.session_state.mcp_stderr_logs[-50:])
+                    st.text_area("Server Logs", value=log_text, height=200, disabled=True)
+                else:
+                    st.info("No stderr logs captured yet. Logs appear here when the MCP server outputs errors.")
+            
             if st.button("🔌 Disconnect"):
                 if st.session_state.mcp_client:
                     st.session_state.mcp_client.disconnect()
                 st.session_state.mcp_client = None
                 st.session_state.client_connected = False
+                st.session_state.mcp_stderr_logs = []
                 st.rerun()
         
         st.markdown("---")
@@ -261,7 +360,7 @@ def main():
         This application uses:
         - **Model Context Protocol** for service communication
         - **LangChain** for LLM orchestration
-        - **Hugging Face** Mistral-7B model
+        - **Azure OpenAI** GPT-4 model
         - **AI Classification** for category detection
         - **Sentiment Analysis** for emotion detection
         """)

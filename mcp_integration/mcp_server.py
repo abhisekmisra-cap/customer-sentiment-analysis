@@ -36,13 +36,22 @@ def get_analyzer() -> CustomerCommentAnalyzer:
     """Get or create the analyzer instance."""
     global analyzer
     if analyzer is None:
-        hf_token = os.environ.get("HUGGINGFACEHUB_API_TOKEN")
-        if not hf_token:
+        # Azure OpenAI credentials from environment variables
+        azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        deployment_name = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME")
+        
+        if not azure_endpoint or not api_key:
             raise ValueError(
-                "HUGGINGFACEHUB_API_TOKEN environment variable is required. "
-                "Get your token from https://huggingface.co/settings/tokens"
+                "AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY environment variables are required. "
+                "Set them to your Azure OpenAI credentials."
             )
-        analyzer = CustomerCommentAnalyzer(hf_token=hf_token)
+        
+        analyzer = CustomerCommentAnalyzer(
+            azure_endpoint=azure_endpoint,
+            api_key=api_key,
+            deployment_name=deployment_name
+        )
     return analyzer
 
 
